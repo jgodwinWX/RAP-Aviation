@@ -2,6 +2,7 @@
 RAP plots for aviation nowcasting
 
 July 25, 2018 (5:11 PM) - Ellrod Index
+
 Ellrod Index is now working. Convergence and deformation are computing using MetPy, whereas vertical wind shear is computed using an approximated difference
 method. Right now, plots are only available at isobaric levels. Eventually, I would like to be able to interpolate these to flight levels (e.g. FL300), but
 the isobaric levels are a start. Also note that the data is smoothed using scipy.ndimage.filters.gaussian_filter in order to remove some of the noisiness
