@@ -13,4 +13,4 @@ To-Do List:
 5. Icing
 6. Forecast
 
-Test - Making sure git works on Windows
+Sample plots can be found at: http://www.jasonsweathercenter.com/aviation/
