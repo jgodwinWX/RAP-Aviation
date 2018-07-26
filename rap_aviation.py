@@ -15,7 +15,7 @@ def windSpeed(u,v):
     return numpy.sqrt(u**2 + v**2)
 
 # function for performing contour plots
-def contourPlot(var1,var2,lev):
+def contourPlot(var1,var2,lev,title,save):
     assert (var1.shape == var2.shape),"Variables must be the same shape!"
     # create a new figure
     plt.clf()
@@ -28,12 +28,21 @@ def contourPlot(var1,var2,lev):
     x,y = m(longitudes,latitudes)
     # create the filled contour plot
     cs_fill = m.contourf(x,y,var1,cmap='gist_ncar',levels=numpy.arange(30,150,5))
-    cs_line = m.contour(x,y,var2,levels=numpy.arange(4,40,2),colors='k',linewidths=0.5)
+    if save == 'ellrod':
+        values = numpy.arange(4,40,2)
+        fmat = '%.0f'
+    elif save == 'ri':
+        values = numpy.arange(0,1,0.1)
+        fmat = '%.1f'
+    else:
+        values = numpy.arange(numpy.nanmin(var2),numpy.nanmax(var2),(numpy.nanmax(var2)-numpy.nanmin(var2))/10.0)
+        fmat = '%f'
+    cs_line = m.contour(x,y,var2,levels=values,colors='r',linewidths=0.5)
     cbar = m.colorbar(cs_fill,location='bottom',pad='5%')
     cbar.set_label('Wind Speed (kt)')
-    plt.clabel(cs_line,cs_line.levels,inline=True,fmt='%.0f',fontsize=8)
-    plt.title('RAP Analyzed %d mb Wind Speed and Ellrod Index' % lev)
-    plt.savefig('plots/rap_wspd_%.0f.png' % lev,bbox_inches='tight')
+    plt.clabel(cs_line,cs_line.levels,inline=True,fmt=fmat,fontsize=6)
+    plt.title('RAP Analyzed %d mb %s' % (lev,title))
+    plt.savefig('plots/rap_%s_%.0f.png' % (save,lev),bbox_inches='tight')
 
 # function for creating a basemap
 def plotBasemap():
@@ -87,8 +96,47 @@ def windShear(u,v,z):
         vws[i] = numpy.sqrt(du**2 + dv**2) / dz
     return vws
 
+def richardsonNumber(theta,z,vws):
+    GRAVITY = 9.80665   # acceleration of gravity (m**2/s**2)
+    # first we compute the theta lapse rate
+    ri = numpy.zeros(theta.shape)
+    for i in range(theta.shape[0]):
+        if i > 0 and i < theta.shape[0] - 1:
+            dt21 = theta[i-1,:,:] - theta[i,:,:]
+            dz21 = z[i-1,:,:] - z[i,:,:]
+            theta_lr21 = dt21 / dz21
+            dt32 = theta[i,:,:] - theta[i+1,:,:]
+            dz32 = z[i,:,:] - z[i+1,:,:]
+            theta_lr32 = dt32 / dz32
+            theta_lr = (theta_lr32 + theta_lr21) / 2.0
+        elif i == 0:
+            dt = theta[i,:,:] - theta[i+1,:,:]
+            dz = z[i,:,:] - z[i+1,:,:]
+            theta_lr = dt / dz
+        elif i == theta.shape[0]-1:
+            dt = theta[i-1,:,:] - theta[i,:,:]
+            dz = z[i-1,:,:] - z[i,:,:]
+            theta_lr = dt / dz
+        else:
+            continue
+        # Brunt-Vaisala Frequency
+        bvf = numpy.sqrt((GRAVITY / theta[i,:,:]) * (theta_lr))
+        
+        # actual Richardson Number computation
+        ri[i] = bvf**2 / vws[i,:,:]**2
+    return ri
+
+# function for computing potential temperature
+def potentialTemperature(t,p):
+    KAPPA = 0.2854  # Poisson Constant
+    theta = numpy.zeros(t.shape)
+    for i in range(t.shape[0]):
+        theta[i,:,:] = t[i,:,:] * (1000.0 / p[i])**KAPPA
+    return theta
+
 # constants
 MPS_TO_KT = 1.94384     # meters per second to knots conversion factor
+sigma = 3               # smoothing factor used by Gaussian Filter
 debug = False           # set this to "True" to plot out just one map
 
 # open the grib file
@@ -101,6 +149,8 @@ vwind = []
 vwind_pres = []
 hght = []
 hght_pres = []
+temp = []
+temp_pres = []
 
 for grb in rap:
     if grb['typeOfLevel'] == 'isobaricInhPa' and grb['name'] == 'U component of wind':
@@ -112,6 +162,9 @@ for grb in rap:
     elif grb['typeOfLevel'] == 'isobaricInhPa' and grb['name'] == 'Geopotential Height':
         hght.append(grb.values)
         hght_pres.append(grb['level'])
+    elif grb['typeOfLevel'] == 'isobaricInhPa' and grb['name'] == 'Temperature':
+        temp.append(grb.values)
+        temp_pres.append(grb['level'])
     else:
         continue
 
@@ -119,35 +172,39 @@ for grb in rap:
 lats,lons = grb.latlons()
 
 # check to make sure the pressure levels are lined up...they should be, but make sure!
-assert (uwind_pres == vwind_pres == hght_pres),"Pressure levels must be the same!"
+assert (uwind_pres == vwind_pres == hght_pres == temp_pres),"Pressure levels must be the same!"
 
 # convert everything into numpy arrays and do some more checks
 uwind = numpy.array(uwind)
 vwind = numpy.array(vwind)
 hght = numpy.array(hght)
-assert (uwind.shape == vwind.shape == hght.shape),"Wind and height fields must be the same shape!"
+temp = numpy.array(temp)
+assert (uwind.shape == vwind.shape == hght.shape == temp.shape),"All fields must be the same shape!"
 assert (uwind[0,:,:].shape == lats.shape),"Latitude does not match shape of vector fields!"
 assert (uwind[0,:,:].shape == lons.shape),"Longitude does not match shape of vector fields!"
 
 # run the base variables through a gaussian filter to smooth the output
-sigma = 3
 for i in range(uwind.shape[0]):
     uwind[i,:,:] = gfilter(uwind[i,:,:],sigma)
     vwind[i,:,:] = gfilter(vwind[i,:,:],sigma)
     hght[i,:,:] = gfilter(hght[i,:,:],sigma)
+    temp[i,:,:] = gfilter(temp[i,:,:],sigma)
 
 # get derived variables at each pressure level
 deformation,convergence = windProducts(lons,lats,uwind,vwind)
 vws = windShear(uwind,vwind,hght)
 ellrod = (vws * (deformation + convergence)) * 1e7
 wspd = windSpeed(uwind,vwind) * MPS_TO_KT
+theta = potentialTemperature(temp,temp_pres)
+ri = richardsonNumber(theta,hght,vws)
 
 # create the plots of wind speed and Ellrod Index
 for i in range(wspd.shape[0]):
     if debug and uwind_pres[i] != 300:
         continue
     else:
-        print('%f mb pressure level' % uwind_pres[i])
-        contourPlot(wspd[i,:,:],ellrod[i,:,:],uwind_pres[i])
+        print('%.0f mb pressure level' % uwind_pres[i])
+        contourPlot(wspd[i,:,:],ellrod[i,:,:],uwind_pres[i],'Wind Speed and Ellrod Index','ellrod')
+        contourPlot(wspd[i,:,:],ri[i,:,:],uwind_pres[i],'Wind Speed and Richardson Number','ri')
 
 print('Done')
